@@ -1,0 +1,25 @@
+# Built images (12 GB each; rebuild from casanovo.def)
+*.sif
+
+# Slurm logs
+slurm-*.out
+
+# Spectrum data: everything except the small public test file
+*.mgf
+*.mzML
+*.mzXML
+*.raw
+!test_mgf/casanovo_sample.mgf
+
+# Run outputs, benchmarks, old saliva data
+*.mztab
+*.gpu_usage.csv
+test_out/
+bench_*/
+old_saliva/
+lightning_logs/
+
+# Downloads and model weights
+dl/
+*.zip
+*.ckpt

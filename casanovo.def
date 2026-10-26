@@ -1,0 +1,109 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:{{ NGC_TAG }}
+
+# Casanovo on NVIDIA's PyTorch container.
+#   x86_64 image  -> CCR general-compute / eai-test, Empire AI Alpha (H100/H200)
+#   aarch64 image -> CCR arm64 (GH200), Empire AI Beta (Grace + B200)
+# Built with build_casanovo_sif.sbatch on a node of the target architecture.
+
+%arguments
+    NGC_TAG=25.06-py3
+    CASANOVO_VERSION=4.3.0
+    CASANOVO_WEIGHTS_URL=https://github.com/Noble-Lab/casanovo/releases/download/v4.2.0/casanovo_v4_2_0.ckpt
+
+%labels
+    casanovo.version {{ CASANOVO_VERSION }}
+    casanovo.weights {{ CASANOVO_WEIGHTS_URL }}
+    ngc.pytorch.tag {{ NGC_TAG }}
+
+%files
+    casanovo-pins.txt /opt/casanovo/casanovo-pins.txt
+
+%post -c /bin/bash
+    set -euo pipefail
+    cd /opt/casanovo
+
+    # 1. Install Casanovo along with NVIDIA's PyTorch build.
+    #    NVIDIA's own pip constraint file pins everything in the image
+    #    Inlcude Casanovo's requirements (e.g. numpy<2).
+    #    NVIDIA's torch pinned + the limits in casanovo-pins.txt.
+    python3 -m pip list --format=freeze \
+        | grep -iE '^(torch|triton|pytorch-triton)==' > constraints.txt || true
+    grep -vE '^[[:space:]]*(#|$)' casanovo-pins.txt >> constraints.txt || true
+    echo "--- install constraints:"; cat constraints.txt
+    torch_before="$(python3 -c 'import torch; print(torch.__version__)')"
+    PIP_CONSTRAINT=/opt/casanovo/constraints.txt \
+        python3 -m pip install --no-cache-dir "casanovo=={{ CASANOVO_VERSION }}"
+    torch_after="$(python3 -c 'import torch; print(torch.__version__)')"
+    if [ "$torch_before" != "$torch_after" ]; then
+        echo "ERROR: pip replaced NVIDIA's torch ($torch_before -> $torch_after)" >&2
+        exit 1
+    fi
+
+
+    # 2. Bake in the model weights
+    name="$(basename "{{ CASANOVO_WEIGHTS_URL }}")"
+    curl -fsSL --retry 5 -o "$name" "{{ CASANOVO_WEIGHTS_URL }}"
+    ln -sf "$name" casanovo.ckpt
+    sha256sum "$name" | tee weights.sha256
+
+
+    # 3. Save Casanovo's default config, for the run script to start from.
+    casanovo configure > /dev/null 2>&1 || true
+    mv casanovo.yaml default_config.yaml
+    rm -f casanovo.log
+
+    python3 -m pip list --format=freeze > installed-packages.txt
+    rm -rf /root/.cache
+
+%environment
+    export CASANOVO_MODEL=/opt/casanovo/casanovo.ckpt
+    export CASANOVO_DEFAULT_CONFIG=/opt/casanovo/default_config.yaml
+    # Casanovo checkpoints predate PyTorch 2.6, which refuses to load them by
+    # default ("Weights only load failed"). Safe here: only the official
+    # weights baked into this image are loaded.
+    export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+    export PYTHONNOUSERSITE=1
+    export MPLBACKEND=Agg
+    export NUMBA_CACHE_DIR=/tmp/numba-cache-$(id -u)
+    export MPLCONFIGDIR=/tmp/matplotlib-$(id -u)
+    export TMPDIR=/tmp
+
+%runscript
+    exec casanovo "$@"
+
+%test
+    set -eu
+    casanovo version
+    python3 -c 'import torch; print("torch", torch.__version__, "| CUDA", torch.version.cuda)'
+    (cd /opt/casanovo && sha256sum -c weights.sha256)
+    test -s /opt/casanovo/default_config.yaml
+
+    # Sequence two synthetic spectra on the CPU with the baked-in weights.
+    echo "TMPDIR inside container: ${TMPDIR:-unset}"; tmp="$(mktemp -d /tmp/casanovo-test.XXXXXX)"
+    cd "$tmp"
+    python3 - <<'PY'
+from pyteomics import mass
+pep, lines = "PEPTIDEK", []
+for scan in (1, 2):
+    peaks = []
+    for i in range(1, len(pep)):
+        peaks.append((mass.fast_mass(pep[:i], ion_type="b", charge=1), 600 + 40 * i))
+        peaks.append((mass.fast_mass(pep[i:], ion_type="y", charge=1), 900 + 50 * i))
+    lines += ["BEGIN IONS", f"TITLE=test_{scan}",
+              f"PEPMASS={mass.fast_mass(pep, ion_type='M', charge=2):.5f}",
+              "CHARGE=2+", f"SCANS={scan}", f"RTINSECONDS={60 * scan}"]
+    lines += [f"{mz:.4f} {i}" for mz, i in sorted(peaks)] + ["END IONS"]
+open("test.mgf", "w").write("\n".join(lines) + "\n")
+PY
+    major="$(casanovo version | awk -F'[: .]+' '/^Casanovo/{print $2}')"
+    if [ "$major" -ge 5 ]; then
+        casanovo sequence test.mgf --model "$CASANOVO_MODEL" --output_dir . --output_root test
+    else
+        casanovo sequence test.mgf --model "$CASANOVO_MODEL" --output test.mztab
+    fi
+    n="$(grep -c '^PSM' test.mztab || true)"
+    echo "Casanovo sequenced $n of 2 test spectra"
+    [ "$n" -ge 1 ]
+    cd / && rm -rf "$tmp"
+    echo "Container test passed."
