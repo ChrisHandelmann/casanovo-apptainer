@@ -33,14 +33,14 @@ Specify the image based on desired CPU type:
 ## x86_64: CCR GPUs, eai-test, Empire AI Alpha
 ```
 sbatch build_casanovo_sif.sbatch 
-'''
+```
 
 ## aarch64: CCR arm64, Empire AI Beta
 ```
 sbatch --partition=arm64 --qos=arm64 --constraint=ARM64 build_casanovo_sif.sbatch
 ```
 
-Each build produces `casanovo-<version>-<arch>.sif`, roughly 10–15 GB. Set `SIF_DIR=/desired/folder` for alterante locations.
+Each build produces `casanovo-<version>-<arch>.sif`, roughly 10–15 GB. Set `SIF_DIR=/desired/folder` for alternate locations.
 After the build is complete, the image will launch a test using two test spectra to test if its viable. 
 The log `slurm-build-casanovo-<jobid>.out` should end with `Container test passed.`
 
@@ -71,3 +71,7 @@ For Empire AI:
 3. Copy `<out_dir>/Casanovo_BW-<beam>/` back to CCR and continue with analysis.
 
 Other settings: `BEAM_SIZE=10 ./submit_casanovo.sh ...` changes the beam (batch size drops to 16 at beam ≥ 8, as before). `CPUS`, `MEM` and `MAX_PARALLEL` change resources.
+
+## Credits
+`test_mgf/casanovo_sample.mgf` is Casanovo's example file (Noble-Lab/casanovo, `sample_data/sample_preprocessed_spectra.mgf`), redistributed under its Apache-2.0 license.
+Casanovo: Yilmaz et al., "Sequence-to-sequence translation from mass spectra to peptides with a transformer model", Nature Communications 15 (2024).

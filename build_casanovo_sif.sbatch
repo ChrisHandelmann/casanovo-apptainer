@@ -38,7 +38,7 @@ args=(--build-arg "CASANOVO_VERSION=$version")
 
 # Download cache and build scratch on node-local disk (deleted with the job),
 # The finished image lands in storage.
-export APPTAINER_TMPDIR="${SLURMTMPDIR:-/tmp}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${SLURMTMPDIR:-/tmp}}"
 export APPTAINER_CACHEDIR="$APPTAINER_TMPDIR/apptainer-cache"
 mkdir -p "$APPTAINER_CACHEDIR"
 
